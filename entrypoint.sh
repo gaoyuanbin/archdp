@@ -24,6 +24,11 @@ trap cleanup SIGTERM SIGINT EXIT
 # ── Minimal runtime setup ─────────────────────────────────────────
 export XDG_RUNTIME_DIR=/tmp/runtime-root
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+# Regenerate if the layer got flattened or the file came through empty.
+if [ ! -s /etc/machine-id ]; then
+  dbus-uuidgen --ensure=/etc/machine-id
+  echo "[*] generated machine-id at runtime"
+fi
 mkdir -p /run/dbus && dbus-daemon --system --fork 2>/dev/null || true
 
 # KasmVNC's vncserver script shells out to `hostname` (inetutils on Arch).
