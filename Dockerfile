@@ -62,16 +62,63 @@ RUN for p in xfce4-session xfce4-panel xfwm4 xfdesktop xfce4-terminal \
     done; echo "core desktop OK"
 
 # ── Layer 2: Perl deps for the KasmVNC vncserver script ────────────
-# Hash::Merge::Simple isn't in the official repos (AUR only), so pull it
-# from CPAN. It's pure Perl, so `make` is the only build tool needed.
+# Everything the vncserver script needs is packaged except
+# Hash::Merge::Simple, which is AUR-only. Rather than drag cpan + a build
+# toolchain into the image for one tiny pure-Perl module, it's written out
+# below. (Arch's perl doesn't reliably ship /usr/bin/cpan, which is what
+# broke the earlier version of this layer with exit 127.)
 RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
     pac \
       perl perl-datetime perl-datetime-timezone perl-list-moreutils \
-      perl-switch perl-try-tiny make \
- && (pacman -Si perl-yaml-tiny >/dev/null 2>&1 && pac perl-yaml-tiny \
-     || PERL_MM_USE_DEFAULT=1 cpan -T YAML::Tiny) \
- && PERL_MM_USE_DEFAULT=1 cpan -T Hash::Merge::Simple \
- && rm -rf /root/.cpan /var/cache/pacman/pkg/*
+      perl-switch perl-try-tiny perl-yaml-tiny \
+      perl-io-socket-ssl perl-net-ssleay \
+ && rm -rf /var/cache/pacman/pkg/*
+
+# Minimal Hash::Merge::Simple: right-hand values win, nested hashes merge
+# recursively. Same contract as the CPAN module for how KasmVNC uses it
+# (layering ~/.vnc/kasmvnc.yaml over /etc/kasmvnc/kasmvnc.yaml).
+RUN mkdir -p /usr/share/perl5/vendor_perl/Hash/Merge \
+ && cat > /usr/share/perl5/vendor_perl/Hash/Merge/Simple.pm << 'PERL'
+package Hash::Merge::Simple;
+
+use strict;
+use warnings;
+use Exporter 'import';
+
+our @EXPORT_OK = qw(merge clone_merge);
+our $VERSION = '0.051';
+
+sub merge {
+    my ($left, @rest) = @_;
+    $left = {} unless defined $left;
+    return $left unless @rest;
+
+    my $right = shift @rest;
+    $right = {} unless defined $right;
+
+    my %merged = %$left;
+    for my $key (keys %$right) {
+        my $rv = $right->{$key};
+        if (ref $rv eq 'HASH' && ref $merged{$key} eq 'HASH') {
+            $merged{$key} = merge($merged{$key}, $rv);
+        }
+        else {
+            $merged{$key} = $rv;
+        }
+    }
+
+    return merge(\%merged, @rest);
+}
+
+sub clone_merge {
+    require Storable;
+    return Storable::dclone(merge(@_));
+}
+
+1;
+PERL
+
+RUN perl -e 'use lib "/usr/share/perl5/vendor_perl"; use Hash::Merge::Simple qw(merge); use YAML::Tiny; my $r = merge({a=>{x=>1,y=>2}}, {a=>{y=>9},b=>3}); die "merge broken" unless $r->{a}{x}==1 && $r->{a}{y}==9 && $r->{b}==3; print "perl deps OK\n"'
 
 # ── Layer 3: KasmVNC ───────────────────────────────────────────────
 # Kasm ships .deb/.rpm/.apk but no pacman package, so unpack the Debian
@@ -103,7 +150,7 @@ RUN set -e; \
     for b in "$XBIN" /usr/bin/kasmvncpasswd; do \
       if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi; \
     done; \
-    perl -e 'use KasmVNC::Config;' 2>/dev/null || echo "WARN: perl module path may need adjusting"
+    perl -c /usr/bin/vncserver || { echo "### vncserver is missing a perl module (see above)"; exit 1; }
 
 # Default the web client to the "High" quality preset (60fps, quality 7-9)
 # instead of "Medium". Values are hardcoded in the bundled ui-*.js.
