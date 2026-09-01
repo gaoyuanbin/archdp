@@ -147,7 +147,8 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
 # them here - the entrypoint calls `vncserver`, not `kasmvncserver`.
 RUN ln -sf /usr/bin/kasmvncserver /usr/bin/vncserver \
  && ln -sf /usr/bin/kasmvncpasswd /usr/bin/vncpasswd \
- && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig
+ && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig \
+ && ln -sf /usr/sbin/Xkasmvnc /usr/sbin/Xvnc
 
 # Inventory of what the .deb actually put on disk, plus library and perl
 # module checks. Deliberately non-fatal: a failure here should tell you what
@@ -281,7 +282,6 @@ encoding:
     min_quality: 7
     max_quality: 9
     consider_lossless_quality: 7
-  rectangle_compress_threads: auto
   video_encoding_mode:
     jpeg_quality: -1
     webp_quality: -1
@@ -291,8 +291,6 @@ encoding:
     exit_video_encoding_mode:
       time_threshold: 3
     scaling_algorithm: progressive_bilinear
-  compare_framebuffer: auto
-  hextile_improved_compression: true
 runtime_configuration:
   allow_client_to_override_kasm_server_settings: true
   allow_override_standard_vnc_server_settings: true
