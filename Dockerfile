@@ -218,21 +218,41 @@ RUN mkdir -p /root/.vnc /root/.config/xfce4/xfconf/xfce-perchannel-xml \
 # manager would do. Output is redirected so failures land in the VNC log.
 RUN cat > /root/.vnc/xstartup << 'XSTARTUP'
 #!/bin/sh
+# Everything here goes to its own log - xfce4-session's stderr otherwise
+# disappears and all you see is a grey screen.
+exec >> /root/.vnc/xstartup.log 2>&1
+set -x
+
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export XDG_SESSION_DESKTOP=xfce
-export XDG_RUNTIME_DIR=/tmp/runtime-root
 export DESKTOP_SESSION=xfce
+export XDG_RUNTIME_DIR=/tmp/runtime-root
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
 
-# Grey root window so a failed session is visibly distinct from "nothing ran"
+# A stale ICE auth file from a previous run makes xfce4-session exit 1
+rm -f /root/.ICEauthority /root/.cache/sessions/* 2>/dev/null
+
 xsetroot -solid '#2b2b2b' 2>/dev/null
 
-echo "[xstartup] launching xfce4-session at $(date)"
-dbus-launch --exit-with-session xfce4-session
-echo "[xstartup] xfce4-session exited with status $? at $(date)"
+eval "$(dbus-launch --sh-syntax)"
+echo "[xstartup] session bus: $DBUS_SESSION_BUS_ADDRESS"
+echo "[xstartup] machine-id: $(cat /etc/machine-id 2>/dev/null)"
+
+echo "[xstartup] trying xfce4-session"
+xfce4-session
+echo "[xstartup] xfce4-session exited with status $?"
+
+# xfce4-session is only a supervisor. If it won't run, starting the pieces
+# directly gives the same desktop minus session save/restore, which is
+# useless in a throwaway container anyway.
+echo "[xstartup] falling back to launching components directly"
+xfsettingsd &
+xfwm4 &
+xfdesktop &
+exec xfce4-panel
 XSTARTUP
 RUN chmod +x /root/.vnc/xstartup
 
