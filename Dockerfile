@@ -260,7 +260,6 @@ encoding:
     min_quality: 7
     max_quality: 9
     consider_lossless_quality: 7
-  rectangle_compress_threads: auto
   video_encoding_mode:
     jpeg_quality: -1
     webp_quality: -1
