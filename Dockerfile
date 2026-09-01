@@ -148,6 +148,7 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
 RUN ln -sf /usr/bin/kasmvncserver /usr/bin/vncserver \
  && ln -sf /usr/bin/kasmvncpasswd /usr/bin/vncpasswd \
  && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig
+ && ln -sf /usr/sbin/Xkasmvnc /usr/sbin/Xvnc
 
 # Inventory of what the .deb actually put on disk, plus library and perl
 # module checks. Deliberately non-fatal: a failure here should tell you what
