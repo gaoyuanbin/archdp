@@ -147,8 +147,7 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
 # them here - the entrypoint calls `vncserver`, not `kasmvncserver`.
 RUN ln -sf /usr/bin/kasmvncserver /usr/bin/vncserver \
  && ln -sf /usr/bin/kasmvncpasswd /usr/bin/vncpasswd \
- && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig \
- && ln -sf /usr/sbin/Xkasmvnc /usr/sbin/Xvnc
+ && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig
 
 # Inventory of what the .deb actually put on disk, plus library and perl
 # module checks. Deliberately non-fatal: a failure here should tell you what
@@ -202,9 +201,31 @@ ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 # ── Pre-bake KasmVNC + XFCE config ─────────────────────────────────
 # Bypasses KasmVNC's interactive TTY prompts on first start.
 RUN mkdir -p /root/.vnc /root/.config/xfce4/xfconf/xfce-perchannel-xml \
- && printf '#!/bin/sh\nexec xfce4-session\n' > /root/.vnc/xstartup \
- && chmod +x /root/.vnc/xstartup \
  && touch /root/.vnc/.de-was-selected /root/.Xauthority
+
+# xfce4-session needs a session D-Bus and the XDG env vars set. Launching it
+# bare gives a black screen: the session exits immediately and nothing draws
+# to the root window. dbus-launch --exit-with-session is what a normal login
+# manager would do. Output is redirected so failures land in the VNC log.
+RUN cat > /root/.vnc/xstartup << 'XSTARTUP'
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_SESSION_DESKTOP=xfce
+export XDG_RUNTIME_DIR=/tmp/runtime-root
+export DESKTOP_SESSION=xfce
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+
+# Grey root window so a failed session is visibly distinct from "nothing ran"
+xsetroot -solid '#2b2b2b' 2>/dev/null
+
+echo "[xstartup] launching xfce4-session at $(date)"
+dbus-launch --exit-with-session xfce4-session
+echo "[xstartup] xfce4-session exited with status $? at $(date)"
+XSTARTUP
+RUN chmod +x /root/.vnc/xstartup
 
 # XFCE otherwise shows a "Default config or empty panel?" dialog on first
 # launch, which is unclickable-ish over a fresh VNC session.
@@ -260,6 +281,7 @@ encoding:
     min_quality: 7
     max_quality: 9
     consider_lossless_quality: 7
+  rectangle_compress_threads: auto
   video_encoding_mode:
     jpeg_quality: -1
     webp_quality: -1
