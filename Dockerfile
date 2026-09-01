@@ -8,11 +8,34 @@ ENV MOZ_DISABLE_CONTENT_SANDBOX=1
 ENV NO_AT_BRIDGE=1
 ENV GTK_OVERLAY_SCROLLING=0
 
+# ── Layer 0: keyring + install helper ──────────────────────────────
+# The archlinux:base image is rebuilt monthly; if the mirrors carry packages
+# signed with keys newer than the image, every download fails with
+# "signature is unknown trust". Refreshing the keyring first avoids that.
+RUN pacman -Sy --noconfirm archlinux-keyring && pacman -Su --noconfirm
+
+# pacman aborts the whole transaction on the first unknown package name, which
+# makes a rename anywhere in a 40-package list fail the build with no useful
+# output. This helper checks each name first, reports the ones that no longer
+# exist, and installs the rest.
+RUN printf '%s\n' \
+  '#!/bin/sh' \
+  'ok=""' \
+  'for p in "$@"; do' \
+  '  if pacman -Si "$p" >/dev/null 2>&1; then' \
+  '    ok="$ok $p"' \
+  '  else' \
+  '    echo "### SKIP (no such package): $p"' \
+  '  fi' \
+  'done' \
+  'if [ -n "$ok" ]; then pacman -S --noconfirm --needed $ok; fi' \
+  > /usr/local/bin/pac && chmod +x /usr/local/bin/pac
+
 # ── Layer 1: XFCE desktop + essentials ─────────────────────────────
 # Hand-picked instead of the full `xfce4` group (skips games, screensaver,
 # ristretto, mousepad, etc). Cache mount keeps packages across rebuilds.
 RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
-    pacman -Syu --noconfirm --needed \
+    pac \
       # Core XFCE
       xfce4-session xfce4-panel xfce4-settings xfwm4 xfdesktop xfconf \
       xfce4-terminal thunar xfce4-appfinder xfce4-notifyd \
@@ -32,14 +55,20 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
       ca-certificates gnupg \
  && rm -rf /usr/share/doc/* /usr/share/man/* /var/cache/pacman/pkg/*
 
+# Anything skipped above is cosmetic except these - fail now if one is missing.
+RUN for p in xfce4-session xfce4-panel xfwm4 xfdesktop xfce4-terminal \
+             firefox dbus xorg-xauth xkeyboard-config; do \
+      pacman -Qi "$p" >/dev/null 2>&1 || { echo "MISSING CRITICAL: $p"; exit 1; }; \
+    done; echo "core desktop OK"
+
 # ── Layer 2: Perl deps for the KasmVNC vncserver script ────────────
 # Hash::Merge::Simple isn't in the official repos (AUR only), so pull it
 # from CPAN. It's pure Perl, so `make` is the only build tool needed.
 RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
-    pacman -S --noconfirm --needed \
+    pac \
       perl perl-datetime perl-datetime-timezone perl-list-moreutils \
       perl-switch perl-try-tiny make \
- && (pacman -S --noconfirm --needed perl-yaml-tiny \
+ && (pacman -Si perl-yaml-tiny >/dev/null 2>&1 && pac perl-yaml-tiny \
      || PERL_MM_USE_DEFAULT=1 cpan -T YAML::Tiny) \
  && PERL_MM_USE_DEFAULT=1 cpan -T Hash::Merge::Simple \
  && rm -rf /root/.cpan /var/cache/pacman/pkg/*
@@ -51,7 +80,7 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
 # so the KasmVNC perl modules have to be relocated.
 ARG KASM_VERSION=1.4.0
 RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
-    pacman -S --noconfirm --needed \
+    pac \
       libxfont2 pixman libunwind libjpeg-turbo libwebp libpng freetype2 \
       libbsd libxcrypt-compat libyaml openssl mesa libglvnd \
       libx11 libxext libxfixes libxdamage libxrandr libxtst libxcursor libxi \
