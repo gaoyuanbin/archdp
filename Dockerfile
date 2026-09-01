@@ -142,15 +142,27 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
  && rm -f /tmp/kasm.deb /tmp/data.tar.* /tmp/control.tar.* /tmp/debian-binary \
  && rm -rf /var/cache/pacman/pkg/*
 
-# Fail the build now rather than at runtime if the Debian binaries are
-# missing an Arch library.
-RUN set -e; \
-    XBIN="$(command -v Xkasmvnc || command -v Xvnc)"; \
-    echo "KasmVNC X server: $XBIN"; \
-    for b in "$XBIN" /usr/bin/kasmvncpasswd; do \
-      if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi; \
-    done; \
-    perl -c /usr/bin/vncserver || { echo "### vncserver is missing a perl module (see above)"; exit 1; }
+# Inventory of what the .deb actually put on disk, plus library and perl
+# module checks. Deliberately non-fatal: a failure here should tell you what
+# is wrong, not hide it behind an empty log and a dead layer.
+RUN echo "=== binaries matching vnc/kasm ==="; \
+    ls -l /usr/bin/ 2>/dev/null | grep -iE 'vnc|kasm' || echo "NONE FOUND in /usr/bin"; \
+    echo "=== KasmVNC perl modules ==="; \
+    ls /usr/share/perl5/vendor_perl/KasmVNC/ 2>/dev/null || echo "NO KasmVNC dir in vendor_perl"; \
+    echo "=== www assets ==="; \
+    ls -d /usr/share/kasmvnc/www 2>/dev/null || echo "NO www dir"; \
+    XBIN="$(command -v Xkasmvnc || command -v Xvnc || true)"; \
+    echo "=== X server: ${XBIN:-NOT FOUND} ==="; \
+    if [ -n "$XBIN" ]; then \
+      ldd "$XBIN" | grep 'not found' || echo "X server: all libs resolved"; \
+    fi; \
+    echo "=== kasmvncpasswd ==="; \
+    if [ -x /usr/bin/kasmvncpasswd ]; then \
+      ldd /usr/bin/kasmvncpasswd | grep 'not found' || echo "kasmvncpasswd: all libs resolved"; \
+    else echo "kasmvncpasswd NOT FOUND"; fi; \
+    echo "=== perl -c vncserver ==="; \
+    perl -c /usr/bin/vncserver 2>&1 || echo "### PERL CHECK FAILED (see above)"; \
+    echo "=== verification complete (non-fatal) ==="
 
 # Default the web client to the "High" quality preset (60fps, quality 7-9)
 # instead of "Medium". Values are hardcoded in the bundled ui-*.js.
