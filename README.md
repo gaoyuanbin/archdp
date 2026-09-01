@@ -1,11 +1,11 @@
-# Kali Linux Desktop in Browser
+# Arch Linux Desktop in Browser
 
-Spin up a temporary Kali Linux desktop you can access from any browser. Runs on GitHub Actions, tunneled through zrok. Use it, close it — nothing persists.
+Spin up a temporary Arch Linux desktop you can access from any browser. Runs on GitHub Actions, tunneled through zrok. Use it, close it — nothing persists.
 
 ## What you get
 
-- Full Kali Linux desktop with dark theme, accessible in your browser
-- Pre-installed: `kali-tools-top10` (nmap, metasploit, burpsuite, sqlmap, wireshark, hydra, john, aircrack-ng, responder, netexec)
+- Full Arch Linux desktop with dark theme, accessible in your browser
+- Pre-installed: (idk lol) `kali-tools-top10` (nmap, metasploit, burpsuite, sqlmap, wireshark, hydra, john, aircrack-ng, responder, netexec)
 - Firefox, terminal, file manager, and standard CLI tools
 - Hack Nerd Font pre-installed for terminal symbol rendering
 - Auto-expires after your chosen duration (30min–6 hours)
@@ -20,10 +20,10 @@ Spin up a temporary Kali Linux desktop you can access from any browser. Runs on 
    - Repo → Settings → Secrets → Actions → `ZROK_ENABLE_TOKEN`
 
 4. **Build the image** (one-time):
-   - Actions → "Build Kali Desktop Image" → Run workflow
+   - Actions → "Build Arch Desktop Image" → Run workflow
 
 5. **Start a session**:
-   - Actions → "Kali Desktop Session" → Run workflow
+   - Actions → "Arch Desktop Session" → Run workflow
    - Pick duration (default 1h) and password (default `abc123`)
    - Grab the zrok URL from the workflow logs
    - Log in with username `user` and your chosen password
@@ -31,7 +31,7 @@ Spin up a temporary Kali Linux desktop you can access from any browser. Runs on 
 ## How it works
 
 ```
-Browser → zrok (HTTPS) → KasmVNC (:6901) → Kali Desktop
+Browser → zrok (HTTPS) → KasmVNC (:6901) → Arch Desktop
 ```
 
 Single container on a GitHub Actions runner. KasmVNC handles the VNC server, web client, and WebSocket transport. Session auto-terminates after your chosen duration.
