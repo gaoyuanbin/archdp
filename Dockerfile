@@ -147,7 +147,7 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
 # them here - the entrypoint calls `vncserver`, not `kasmvncserver`.
 RUN ln -sf /usr/bin/kasmvncserver /usr/bin/vncserver \
  && ln -sf /usr/bin/kasmvncpasswd /usr/bin/vncpasswd \
- && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig
+ && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig \
  && ln -sf /usr/sbin/Xkasmvnc /usr/sbin/Xvnc
 
 # Inventory of what the .deb actually put on disk, plus library and perl
