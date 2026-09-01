@@ -35,8 +35,7 @@ chmod 600 /root/.kasmpasswd
 
 # ── Ensure KasmVNC prerequisite files exist ───────────────────────
 mkdir -p /root/.vnc
-[ -f /root/.vnc/xstartup ] || printf '#!/bin/sh\nexec xfce4-session\n' > /root/.vnc/xstartup
-chmod +x /root/.vnc/xstartup
+chmod +x /root/.vnc/xstartup 2>/dev/null || true
 touch /root/.vnc/.de-was-selected
 touch /root/.Xauthority
 
@@ -51,6 +50,20 @@ vncserver :1 \
   -FreeKeyMappings
 
 echo "[*] KasmVNC started on port 6901"
+
+# Surface the session log - xstartup errors (a desktop that won't launch)
+# only appear here, not on stdout.
+sleep 3
+VNCLOG="$(ls -t /root/.vnc/*.log 2>/dev/null | head -1)"
+if [ -n "$VNCLOG" ]; then
+  echo "[*] streaming session log: $VNCLOG"
+  tail -n +1 -f "$VNCLOG" 2>/dev/null &
+else
+  echo "[!] no session log found in /root/.vnc/"
+fi
+
+echo "[*] processes after startup:"
+ps -eo comm= | sort -u | grep -iE 'xfce|xfwm|dbus|xkasm' || echo "  (no desktop processes)"
 
 # ── Launch zrok tunnel ────────────────────────────────────────────
 echo "[*] Disabling any stale zrok environment..."
