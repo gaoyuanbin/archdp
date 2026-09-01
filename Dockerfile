@@ -142,6 +142,13 @@ RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
  && rm -f /tmp/kasm.deb /tmp/data.tar.* /tmp/control.tar.* /tmp/debian-binary \
  && rm -rf /var/cache/pacman/pkg/*
 
+# The .deb ships kasmvncserver/kasmvncpasswd/kasmvncconfig and expects its
+# postinst to create the classic vnc* names. We skipped the postinst, so make
+# them here - the entrypoint calls `vncserver`, not `kasmvncserver`.
+RUN ln -sf /usr/bin/kasmvncserver /usr/bin/vncserver \
+ && ln -sf /usr/bin/kasmvncpasswd /usr/bin/vncpasswd \
+ && ln -sf /usr/bin/kasmvncconfig /usr/bin/vncconfig
+
 # Inventory of what the .deb actually put on disk, plus library and perl
 # module checks. Deliberately non-fatal: a failure here should tell you what
 # is wrong, not hide it behind an empty log and a dead layer.
@@ -161,7 +168,7 @@ RUN echo "=== binaries matching vnc/kasm ==="; \
       ldd /usr/bin/kasmvncpasswd | grep 'not found' || echo "kasmvncpasswd: all libs resolved"; \
     else echo "kasmvncpasswd NOT FOUND"; fi; \
     echo "=== perl -c vncserver ==="; \
-    perl -c /usr/bin/vncserver 2>&1 || echo "### PERL CHECK FAILED (see above)"; \
+    perl -c /usr/bin/kasmvncserver 2>&1 || echo "### PERL CHECK FAILED (see above)"; \
     echo "=== verification complete (non-fatal) ==="
 
 # Default the web client to the "High" quality preset (60fps, quality 7-9)
@@ -176,10 +183,16 @@ RUN set -e; \
     URL="$(curl -fsSL https://api.github.com/repos/openziti/zrok/releases/latest \
           | grep -oE '"browser_download_url": *"[^"]*linux_amd64\.tar\.gz"' \
           | head -1 | cut -d'"' -f4)"; \
-    echo "zrok: $URL"; \
-    curl -fsSL "$URL" | tar -xz -C /usr/local/bin zrok; \
-    chmod +x /usr/local/bin/zrok; \
-    zrok version || true
+    echo "zrok tarball: $URL"; \
+    mkdir -p /tmp/zrokx; \
+    curl -fsSL "$URL" -o /tmp/zrok.tgz; \
+    tar -xzf /tmp/zrok.tgz -C /tmp/zrokx; \
+    echo "=== tarball contents ==="; find /tmp/zrokx -type f | head -20; \
+    ZBIN="$(find /tmp/zrokx -type f -name 'zrok*' -perm -u+x | head -1)"; \
+    [ -n "$ZBIN" ] || { echo "### no zrok binary found in tarball"; exit 1; }; \
+    install -m 0755 "$ZBIN" /usr/local/bin/zrok; \
+    rm -rf /tmp/zrok.tgz /tmp/zrokx; \
+    zrok version
 
 # ── Locale ─────────────────────────────────────────────────────────
 RUN sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
