@@ -1,91 +1,118 @@
 # syntax=docker/dockerfile:1
-FROM kalilinux/kali-rolling
+FROM archlinux:base
 
-ENV DEBIAN_FRONTEND=noninteractive
 # Firefox's content sandbox uses CLONE_NEWUSER which Docker's default
-# seccomp profile blocks → content processes crash with I/O errors.
+# seccomp profile blocks -> content processes crash with I/O errors.
 ENV MOZ_DISABLE_CONTENT_SANDBOX=1
-# Prevent GTK apps from connecting to the accessibility D-Bus
-# (no screen readers in a container — saves startup time & error spam)
+# No screen readers in a container - skip the accessibility D-Bus.
 ENV NO_AT_BRIDGE=1
-# Disable overlay scrollbar animations (less rendering overhead)
 ENV GTK_OVERLAY_SCROLLING=0
 
-# Skip downloading apt translation files (faster apt-get update)
-RUN echo 'Acquire::Languages "none";' > /etc/apt/apt.conf.d/99no-translations
+# ── Layer 1: XFCE desktop + essentials ─────────────────────────────
+# Hand-picked instead of the full `xfce4` group (skips games, screensaver,
+# ristretto, mousepad, etc). Cache mount keeps packages across rebuilds.
+RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
+    pacman -Syu --noconfirm --needed \
+      # Core XFCE
+      xfce4-session xfce4-panel xfce4-settings xfwm4 xfdesktop xfconf \
+      xfce4-terminal thunar xfce4-appfinder xfce4-notifyd \
+      xfce4-whiskermenu-plugin \
+      # Desktop infrastructure
+      dbus mate-polkit xdg-utils \
+      xorg-xauth xorg-xrandr xorg-xkbcomp xorg-xsetroot xkeyboard-config \
+      # Look & feel
+      arc-gtk-theme papirus-icon-theme archlinux-wallpaper \
+      # Browser
+      firefox \
+      # Fonts
+      ttf-hack-nerd noto-fonts noto-fonts-emoji cantarell-fonts ttf-dejavu \
+      # CLI essentials
+      wget curl nano sudo less openssh inetutils iproute2 net-tools \
+      iputils traceroute htop lsof zip unzip file jq python \
+      ca-certificates gnupg \
+ && rm -rf /usr/share/doc/* /usr/share/man/* /var/cache/pacman/pkg/*
 
-# ── Layer 1: Minimal XFCE desktop + essentials ─────────────────────
-# Hand-picked instead of kali-desktop-xfce (saves ~1.5GB of bloat:
-# games, accessibility, printing, redundant plugins).
-# Cache mount keeps downloaded .debs across rebuilds.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    # Core XFCE
-    xfce4 xfce4-terminal thunar xfce4-appfinder xfce4-notifyd \
-    # All 6 panel plugins referenced by kali-themes default panel config
-    # (missing any one of these causes a "Plugin loading failure" dialog)
-    xfce4-whiskermenu-plugin xfce4-cpugraph-plugin xfce4-genmon-plugin \
-    xfce4-pulseaudio-plugin xfce4-power-manager-plugins \
-    # Kali look & feel (kali-themes pulls wallpapers as a dependency)
-    kali-themes kali-menu \
-    # Desktop infrastructure (dbus session bus, PolicyKit, xdg-open)
-    dbus dbus-x11 dbus-user-session x11-xserver-utils \
-    xdg-utils mate-polkit \
-    # Browser
-    firefox-esr \
-    # Fonts (Hack Nerd Font symbols, general coverage)
-    fonts-hack fonts-noto-color-emoji fonts-wqy-zenhei \
-    # CLI essentials
-    wget curl nano sudo less openssh-client \
-    net-tools iproute2 iputils-ping dnsutils traceroute \
-    htop lsof zip unzip file jq \
-    ca-certificates locales python3 gnupg xz-utils \
-    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* \
-    && find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' -exec rm -rf {} + 2>/dev/null; true
+# ── Layer 2: Perl deps for the KasmVNC vncserver script ────────────
+# Hash::Merge::Simple isn't in the official repos (AUR only), so pull it
+# from CPAN. It's pure Perl, so `make` is the only build tool needed.
+RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
+    pacman -S --noconfirm --needed \
+      perl perl-datetime perl-datetime-timezone perl-list-moreutils \
+      perl-switch perl-try-tiny make \
+ && (pacman -S --noconfirm --needed perl-yaml-tiny \
+     || PERL_MM_USE_DEFAULT=1 cpan -T YAML::Tiny) \
+ && PERL_MM_USE_DEFAULT=1 cpan -T Hash::Merge::Simple \
+ && rm -rf /root/.cpan /var/cache/pacman/pkg/*
 
-# ── Layer 2: KasmVNC ───────────────────────────────────────────────
-# Single .deb replaces tigervnc + novnc + websockify.
-# Built-in WebSocket server, web client, WebP encoding.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    wget -q https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/kasmvncserver_kali-rolling_1.4.0_amd64.deb \
-       -O /tmp/kasmvnc.deb \
-    && apt-get update \
-    && apt-get install -y /tmp/kasmvnc.deb \
-    && rm /tmp/kasmvnc.deb
+# ── Layer 3: KasmVNC ───────────────────────────────────────────────
+# Kasm ships .deb/.rpm/.apk but no pacman package, so unpack the Debian
+# bookworm build over the filesystem (this is what the AUR package does).
+# Arch's @INC has /usr/share/perl5/vendor_perl, not /usr/share/perl5,
+# so the KasmVNC perl modules have to be relocated.
+ARG KASM_VERSION=1.4.0
+RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
+    pacman -S --noconfirm --needed \
+      libxfont2 pixman libunwind libjpeg-turbo libwebp libpng freetype2 \
+      libbsd libxcrypt-compat libyaml openssl mesa libglvnd \
+      libx11 libxext libxfixes libxdamage libxrandr libxtst libxcursor libxi \
+      libxshmfence libxau libxdmcp zlib \
+ && cd /tmp \
+ && curl -fsSL -o kasm.deb \
+      "https://github.com/kasmtech/KasmVNC/releases/download/v${KASM_VERSION}/kasmvncserver_bookworm_${KASM_VERSION}_amd64.deb" \
+ && bsdtar -xf kasm.deb -C /tmp \
+ && bsdtar -xf /tmp/data.tar.* -C / \
+ && mkdir -p /usr/share/perl5/vendor_perl \
+ && mv /usr/share/perl5/KasmVNC /usr/share/perl5/vendor_perl/ \
+ && rm -f /tmp/kasm.deb /tmp/data.tar.* /tmp/control.tar.* /tmp/debian-binary \
+ && rm -rf /var/cache/pacman/pkg/*
 
-# Default the KasmVNC web client to "High" quality preset (60fps, quality 7-9)
-# instead of "Medium" (24fps, quality 4). Preset values are hardcoded in the
-# bundled ui-*.js (Vite hashed filename). The minified code uses single-letter
-# vars (e.g. o.initSetting) so we match just the function name, not the object.
+# Fail the build now rather than at runtime if the Debian binaries are
+# missing an Arch library.
+RUN set -e; \
+    XBIN="$(command -v Xkasmvnc || command -v Xvnc)"; \
+    echo "KasmVNC X server: $XBIN"; \
+    for b in "$XBIN" /usr/bin/kasmvncpasswd; do \
+      if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi; \
+    done; \
+    perl -e 'use KasmVNC::Config;' 2>/dev/null || echo "WARN: perl module path may need adjusting"
+
+# Default the web client to the "High" quality preset (60fps, quality 7-9)
+# instead of "Medium". Values are hardcoded in the bundled ui-*.js.
 RUN sed -i 's/\(initSetting("video_quality",\)2)/\13)/g; s/\(updateSetting("video_quality",\)2)/\13)/g' \
-    /usr/share/kasmvnc/www/assets/ui-*.js
+      /usr/share/kasmvnc/www/assets/ui-*.js
 
-# ── Layer 3: zrok tunnel ───────────────────────────────────────────
-RUN curl -sSf https://get.openziti.io/install.bash | bash -s zrok2
+# ── Layer 4: zrok tunnel ───────────────────────────────────────────
+# The openziti install script is apt/dnf-oriented, so grab the release
+# tarball directly. Installs the binary as /usr/local/bin/zrok.
+RUN set -e; \
+    URL="$(curl -fsSL https://api.github.com/repos/openziti/zrok/releases/latest \
+          | grep -oE '"browser_download_url": *"[^"]*linux_amd64\.tar\.gz"' \
+          | head -1 | cut -d'"' -f4)"; \
+    echo "zrok: $URL"; \
+    curl -fsSL "$URL" | tar -xz -C /usr/local/bin zrok; \
+    chmod +x /usr/local/bin/zrok; \
+    zrok version || true
 
-# ── Layer 4: Pentesting tools (heaviest, changes least often) ──────
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    kali-tools-top10 \
-    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/*
-
-# ── Locale ──────────────────────────────────────────────────────────
-RUN sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
+# ── Locale ─────────────────────────────────────────────────────────
+RUN sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
 ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
 # ── Pre-bake KasmVNC + XFCE config ─────────────────────────────────
-# Bypass KasmVNC's 3 interactive TTY prompts + pre-configure Kali dark theme
+# Bypasses KasmVNC's interactive TTY prompts on first start.
 RUN mkdir -p /root/.vnc /root/.config/xfce4/xfconf/xfce-perchannel-xml \
-    && printf '#!/bin/sh\nexec xfce4-session\n' > /root/.vnc/xstartup \
-    && chmod +x /root/.vnc/xstartup \
-    && touch /root/.vnc/.de-was-selected /root/.Xauthority
+ && printf '#!/bin/sh\nexec xfce4-session\n' > /root/.vnc/xstartup \
+ && chmod +x /root/.vnc/xstartup \
+ && touch /root/.vnc/.de-was-selected /root/.Xauthority
 
-# Font rendering: Hack Nerd Font as monospace + anti-aliasing + hinting.
-# fontconfig applies to all apps. Using grayscale AA (rgba=none) because
-# subpixel rendering causes color fringing over VNC (unknown client LCD layout).
+# XFCE otherwise shows a "Default config or empty panel?" dialog on first
+# launch, which is unclickable-ish over a fresh VNC session.
+RUN if [ -f /etc/xdg/xfce4/panel/default.xml ]; then \
+      cp /etc/xdg/xfce4/panel/default.xml \
+         /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml; \
+    fi
+
+# Font rendering: Hack Nerd Font as monospace, grayscale AA (subpixel
+# rendering causes color fringing over VNC - unknown client LCD layout).
 RUN cat > /etc/fonts/local.conf << 'FONTCONF'
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
@@ -106,11 +133,9 @@ RUN cat > /etc/fonts/local.conf << 'FONTCONF'
 FONTCONF
 RUN fc-cache -f
 
-# KasmVNC YAML config — optimized for tunneled WebSocket access
-# Written to BOTH /etc/kasmvnc/ (system) AND /root/.vnc/ (per-user).
-# KasmVNC reads the per-user file (~/.vnc/kasmvnc.yaml) if it exists,
-# otherwise creates one from built-in defaults — ignoring /etc/kasmvnc/.
-# Pre-creating the per-user file ensures our settings actually apply.
+# KasmVNC YAML config - optimized for tunneled WebSocket access.
+# Written to both /etc/kasmvnc/ and /root/.vnc/ because the per-user file
+# wins if it exists, and gets regenerated from defaults if it doesn't.
 RUN cat > /tmp/kasmvnc.yaml << 'YAML'
 network:
   protocol: http
@@ -133,8 +158,7 @@ encoding:
     min_quality: 7
     max_quality: 9
     consider_lossless_quality: 7
-    rectangle_compress_threads: auto
-  # Optimized encoding for rapid screen changes (scrolling, video)
+  rectangle_compress_threads: auto
   video_encoding_mode:
     jpeg_quality: -1
     webp_quality: -1
@@ -144,7 +168,6 @@ encoding:
     exit_video_encoding_mode:
       time_threshold: 3
     scaling_algorithm: progressive_bilinear
-  # Skip sending unchanged pixels (reduces bandwidth)
   compare_framebuffer: auto
   hextile_improved_compression: true
 runtime_configuration:
@@ -160,19 +183,19 @@ data_loss_prevention:
 command_line:
   prompt: false
 YAML
-RUN cp /tmp/kasmvnc.yaml /etc/kasmvnc/kasmvnc.yaml \
-    && cp /tmp/kasmvnc.yaml /root/.vnc/kasmvnc.yaml \
-    && rm /tmp/kasmvnc.yaml
+RUN mkdir -p /etc/kasmvnc \
+ && cp /tmp/kasmvnc.yaml /etc/kasmvnc/kasmvnc.yaml \
+ && cp /tmp/kasmvnc.yaml /root/.vnc/kasmvnc.yaml \
+ && rm /tmp/kasmvnc.yaml
 
-# XFCE dark theme: GTK + icons + window manager + wallpaper
+# Dark theme: GTK + icons + WM. Arc-Dark/Papirus replace Kali-Dark.
 RUN cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml << 'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xsettings" version="1.0">
   <property name="Net" type="empty">
-    <property name="ThemeName" type="string" value="Kali-Dark"/>
-    <property name="IconThemeName" type="string" value="Flat-Remix-Blue-Dark"/>
+    <property name="ThemeName" type="string" value="Arc-Dark"/>
+    <property name="IconThemeName" type="string" value="Papirus-Dark"/>
     <property name="CursorThemeName" type="string" value="Adwaita"/>
-    <!-- No audio device in container -->
     <property name="EnableEventSounds" type="bool" value="false"/>
     <property name="EnableInputFeedbackSounds" type="bool" value="false"/>
   </property>
@@ -193,40 +216,36 @@ RUN cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml << 'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfwm4" version="1.0">
   <property name="general" type="empty">
-    <property name="theme" type="string" value="Kali-Dark"/>
+    <property name="theme" type="string" value="Arc-Dark"/>
     <property name="title_font" type="string" value="Cantarell Bold 10"/>
     <property name="title_alignment" type="string" value="center"/>
-    <!-- Disable compositor: tries GPU ops that fail in containers, wastes CPU -->
+    <!-- Compositor tries GPU ops that fail in containers -->
     <property name="use_compositing" type="bool" value="false"/>
-    <!-- Disable vsync: meaningless in VNC, just adds latency -->
     <property name="vblank_mode" type="string" value="off"/>
     <property name="sync_to_vblank" type="bool" value="false"/>
     <property name="box_move" type="bool" value="false"/>
     <property name="box_resize" type="bool" value="false"/>
-    <!-- Disable unnecessary visual effects -->
     <property name="cycle_preview" type="bool" value="false"/>
     <property name="zoom_desktop" type="bool" value="false"/>
     <property name="zoom_pointer" type="bool" value="false"/>
-    <!-- No shadows (waste CPU cycles encoding pixels VNC must send) -->
     <property name="show_dock_shadow" type="bool" value="false"/>
     <property name="show_frame_shadow" type="bool" value="false"/>
     <property name="show_popup_shadow" type="bool" value="false"/>
-    <!-- No transparency (100% = fully opaque, nothing to composite) -->
     <property name="frame_opacity" type="int" value="100"/>
     <property name="inactive_opacity" type="int" value="100"/>
     <property name="move_opacity" type="int" value="100"/>
     <property name="popup_opacity" type="int" value="100"/>
     <property name="resize_opacity" type="int" value="100"/>
-    <!-- Single workspace: less WM state to manage -->
     <property name="workspace_count" type="int" value="1"/>
   </property>
 </channel>
 XML
 
+# Wallpaper path is resolved at build time - archlinux-wallpaper filenames
+# change between releases.
 RUN cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml << 'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-desktop" version="1.0">
-  <!-- Disable desktop icons (prevents xfdesktop file monitoring overhead) -->
   <property name="desktop-icons" type="empty">
     <property name="style" type="int" value="0"/>
   </property>
@@ -234,7 +253,7 @@ RUN cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml << 'X
     <property name="screen0" type="empty">
       <property name="monitorVNC-0" type="empty">
         <property name="workspace0" type="empty">
-          <property name="last-image" type="string" value="/usr/share/backgrounds/kali-16x9/default"/>
+          <property name="last-image" type="string" value="@WALLPAPER@"/>
           <property name="image-style" type="int" value="5"/>
         </property>
       </property>
@@ -242,8 +261,11 @@ RUN cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml << 'X
   </property>
 </channel>
 XML
+RUN WALL="$(find /usr/share/backgrounds/archlinux -type f \( -name '*.png' -o -name '*.jpg' \) 2>/dev/null | sort | head -1)" \
+ && sed -i "s|@WALLPAPER@|${WALL}|" \
+      /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
 
-# Disable Thunar thumbnail generation (saves CPU + I/O)
+# Disable Thunar thumbnails (saves CPU + I/O)
 RUN cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/thunar.xml << 'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="thunar" version="1.0">
@@ -253,8 +275,8 @@ RUN cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/thunar.xml << 'XML'
 XML
 
 # ── Firefox: suppress first-run warnings and telemetry ─────────────
-RUN mkdir -p /usr/lib/firefox-esr/distribution \
-    && cat > /usr/lib/firefox-esr/distribution/policies.json << 'JSON'
+RUN mkdir -p /usr/lib/firefox/distribution \
+ && cat > /usr/lib/firefox/distribution/policies.json << 'JSON'
 {
   "policies": {
     "DisableTelemetry": true,
@@ -279,27 +301,21 @@ RUN mkdir -p /usr/lib/firefox-esr/distribution \
 }
 JSON
 
-# ── XFCE: set default terminal emulator ───────────────────────────
+# ── XFCE default terminal ──────────────────────────────────────────
 RUN mkdir -p /etc/xdg/xfce4 \
-    && printf 'TerminalEmulator=xfce4-terminal\nTerminalEmulatorDismissed=true\n' \
-       > /etc/xdg/xfce4/helpers.rc
-
-# ── Install Hack Nerd Font (powerline/devicon symbols) ─────────────
-RUN mkdir -p /usr/share/fonts/truetype/hack-nerd \
-    && curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz \
-       | tar -xJ -C /usr/share/fonts/truetype/hack-nerd \
-    && fc-cache -f
+ && printf 'TerminalEmulator=xfce4-terminal\nTerminalEmulatorDismissed=true\n' \
+      > /etc/xdg/xfce4/helpers.rc
 
 # ── Fix XFCE-in-Docker annoyances ──────────────────────────────────
 RUN mkdir -p /etc/polkit-1/localauthority/50-local.d \
-    && printf '[Allow Colord]\nIdentity=unix-user:*\nAction=org.freedesktop.color-manager.create-device;org.freedesktop.color-manager.create-profile;org.freedesktop.color-manager.delete-device;org.freedesktop.color-manager.delete-profile;org.freedesktop.color-manager.modify-device;org.freedesktop.color-manager.modify-profile\nResultAny=yes\nResultInactive=yes\nResultActive=yes\n' \
-       > /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla \
-    && rm -f /etc/xdg/autostart/xfce4-power-manager.desktop \
-             /etc/xdg/autostart/xscreensaver.desktop \
-             /etc/xdg/autostart/light-locker.desktop \
-             /etc/xdg/autostart/at-spi-dbus-bus.desktop 2>/dev/null; true
+ && printf '[Allow Colord]\nIdentity=unix-user:*\nAction=org.freedesktop.color-manager.create-device;org.freedesktop.color-manager.create-profile;org.freedesktop.color-manager.delete-device;org.freedesktop.color-manager.delete-profile;org.freedesktop.color-manager.modify-device;org.freedesktop.color-manager.modify-profile\nResultAny=yes\nResultInactive=yes\nResultActive=yes\n' \
+      > /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla \
+ && rm -f /etc/xdg/autostart/xfce4-power-manager.desktop \
+          /etc/xdg/autostart/xfce4-screensaver.desktop \
+          /etc/xdg/autostart/xscreensaver.desktop \
+          /etc/xdg/autostart/light-locker.desktop \
+          /etc/xdg/autostart/at-spi-dbus-bus.desktop 2>/dev/null; true
 
-# Disable tumbler thumbnail daemon (all thumbnailer plugins)
 RUN if [ -f /etc/xdg/tumbler/tumbler.rc ]; then \
       sed -i 's/^Disabled=false/Disabled=true/' /etc/xdg/tumbler/tumbler.rc; \
     fi
@@ -308,7 +324,6 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 6901
-
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -sf http://localhost:6901/ > /dev/null 2>&1 || exit 1
 
