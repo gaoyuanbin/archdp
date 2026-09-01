@@ -195,6 +195,14 @@ RUN set -e; \
     rm -rf /tmp/zrok.tgz /tmp/zrokx; \
     zrok version
 
+# D-Bus refuses to start a session bus without a machine ID, and the Arch base
+# image ships /etc/machine-id empty. Symptom is XFCE's "Unable to contact
+# settings server" and a desktop with no panel.
+RUN dbus-uuidgen --ensure=/etc/machine-id \
+ && mkdir -p /var/lib/dbus \
+ && ln -sf /etc/machine-id /var/lib/dbus/machine-id \
+ && test -s /etc/machine-id && echo "machine-id: $(cat /etc/machine-id)"
+
 # ── Locale ─────────────────────────────────────────────────────────
 RUN sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
 ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
