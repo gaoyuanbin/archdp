@@ -59,13 +59,18 @@ echo "[*] KasmVNC started on port 6901"
 # Surface the session log - xstartup errors (a desktop that won't launch)
 # only appear here, not on stdout.
 sleep 3
-VNCLOG="$(ls -t /root/.vnc/*.log 2>/dev/null | head -1)"
+VNCLOG="$(ls -t /root/.vnc/*.log 2>/dev/null | grep -v xstartup | head -1)"
 if [ -n "$VNCLOG" ]; then
   echo "[*] streaming session log: $VNCLOG"
   tail -n +1 -f "$VNCLOG" 2>/dev/null &
 else
   echo "[!] no session log found in /root/.vnc/"
 fi
+
+# xstartup writes its own log; it may not exist yet, so create it first
+touch /root/.vnc/xstartup.log
+echo "[*] streaming xstartup log"
+tail -n +1 -f /root/.vnc/xstartup.log 2>/dev/null &
 
 echo "[*] processes after startup:"
 ps -eo comm= | sort -u | grep -iE 'xfce|xfwm|dbus|xkasm' || echo "  (no desktop processes)"
