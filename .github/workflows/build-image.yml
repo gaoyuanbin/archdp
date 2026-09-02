@@ -1,4 +1,4 @@
-name: Build Kali Desktop Image
+name: Build Arch Desktop Image
 
 on:
   workflow_dispatch:
