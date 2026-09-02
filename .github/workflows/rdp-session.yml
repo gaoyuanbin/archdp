@@ -1,4 +1,4 @@
-name: Kali Desktop Session
+name: Arch Desktop Session
 
 on:
   workflow_dispatch:
